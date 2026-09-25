@@ -8,8 +8,8 @@ static JSON into this repo. The app reads that JSON at zero YouTube quota.
 Reads : YOUTUBE_API_KEY (env), sheikhs.json (repo root)
 Writes: channels/<channelId>.json for every channel, plus channels/index.json
 
-Quota: 1 unit for the batched channels.list, then 11 units per channel
-       (5 playlistItems pages + 5 videos batches + 1 playlists page).
+Quota: 1 unit for the batched channels.list, then up to 20 units per channel
+       (5 playlistItems pages + 5 videos batches + up to 10 playlists pages).
 
 Python 3 standard library only.
 """
@@ -31,6 +31,9 @@ SHEIKHS_PATH = os.path.join(REPO_ROOT, "sheikhs.json")
 CHANNELS_DIR = os.path.join(REPO_ROOT, "channels")
 
 MAX_UPLOAD_PAGES = 5
+# Playlists have no cursor in the artifact, so this bound is the hard ceiling
+# on what the app can ever see. Kept well above the largest real channel.
+MAX_PLAYLIST_PAGES = 10
 PAGE_SIZE = 50
 HTTP_ATTEMPTS = 3          # initial try + 2 retries
 BACKOFF_SECONDS = (1, 3)   # waited before retry 1 and retry 2
@@ -264,27 +267,44 @@ def fetch_video_details(video_ids, api_key):
 
 
 def fetch_playlists(channel_id, api_key):
-    """playlists.list, ONE page only. Private playlists are simply absent."""
-    data = api_get(
-        "playlists",
-        {
+    """Walk at most MAX_PLAYLIST_PAGES pages of the channel's playlists.
+
+    Returns a list of {id, title, thumbnailUrl, itemCount, description} in
+    channel order. Private playlists are simply absent.
+
+    No page token is returned, unlike fetch_uploads: the artifact carries no
+    playlist cursor and the app cannot continue the walk itself, so whatever
+    this returns is every playlist the app will ever see.
+    """
+    out = []
+    seen = set()
+    page_token = None
+    for _ in range(MAX_PLAYLIST_PAGES):
+        params = {
             "part": "snippet,contentDetails",
             "channelId": channel_id,
             "maxResults": PAGE_SIZE,
-        },
-        api_key,
-    )
-    out = []
-    for item in data.get("items", []):
-        snippet = item.get("snippet") or {}
-        content = item.get("contentDetails") or {}
-        out.append({
-            "id": as_str(item.get("id")),
-            "title": as_str(snippet.get("title")),
-            "thumbnailUrl": pick_thumbnail(snippet.get("thumbnails")),
-            "itemCount": as_int(content.get("itemCount"), 0) or 0,
-            "description": as_str(snippet.get("description")),
-        })
+        }
+        if page_token:
+            params["pageToken"] = page_token
+        data = api_get("playlists", params, api_key)
+        for item in data.get("items", []):
+            playlist_id = item.get("id")
+            if not playlist_id or playlist_id in seen:
+                continue
+            seen.add(playlist_id)
+            snippet = item.get("snippet") or {}
+            content = item.get("contentDetails") or {}
+            out.append({
+                "id": as_str(playlist_id),
+                "title": as_str(snippet.get("title")),
+                "thumbnailUrl": pick_thumbnail(snippet.get("thumbnails")),
+                "itemCount": as_int(content.get("itemCount"), 0) or 0,
+                "description": as_str(snippet.get("description")),
+            })
+        page_token = data.get("nextPageToken")
+        if not page_token:
+            break
     return out
 
 

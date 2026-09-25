@@ -1,0 +1,56 @@
+name: Add sheikh channel
+
+on:
+  workflow_dispatch:
+    inputs:
+      channel:
+        description: "Channel URL, @handle, or UC… id"
+        required: true
+        type: string
+      name:
+        description: "Display name in the app (blank = use YouTube's title)"
+        required: false
+        type: string
+
+permissions:
+  contents: write
+
+concurrency:
+  group: add-channel
+  cancel-in-progress: false
+
+jobs:
+  add:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Add channel to sheikhs.json
+        env:
+          YOUTUBE_API_KEY: ${{ secrets.YOUTUBE_API_KEY }}
+          INPUT_CHANNEL: ${{ inputs.channel }}
+          INPUT_NAME: ${{ inputs.name }}
+        run: python scripts/add_channel.py
+
+      - name: Refresh prefetched artifacts
+        env:
+          YOUTUBE_API_KEY: ${{ secrets.YOUTUBE_API_KEY }}
+        run: python scripts/prefetch.py
+
+      - name: Commit and push
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add sheikhs.json channels
+          if git diff --staged --quiet; then
+            echo "No changes to commit."
+          else
+            git commit -m "chore: add channel via workflow"
+            git push
+          fi
