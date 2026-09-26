@@ -33,6 +33,7 @@ const PAGE = `<!doctype html>
     --accent-soft: rgba(15, 122, 90, 0.14);
     --ok: #0f7a5a;
     --err: #b3261e;
+    --warn: #8a5300;
     --shadow: 0 1px 2px rgba(20, 23, 26, 0.05), 0 8px 24px rgba(20, 23, 26, 0.06);
   }
 
@@ -49,6 +50,7 @@ const PAGE = `<!doctype html>
       --accent-soft: rgba(63, 191, 147, 0.18);
       --ok: #3fbf93;
       --err: #ff8a80;
+      --warn: #f2b25c;
       --shadow: 0 1px 2px rgba(0, 0, 0, 0.4), 0 8px 24px rgba(0, 0, 0, 0.35);
     }
   }
@@ -172,6 +174,7 @@ const PAGE = `<!doctype html>
 
   .status.ok { color: var(--ok); font-weight: 600; }
   .status.err { color: var(--err); font-weight: 600; }
+  .status.warn { color: var(--warn); font-weight: 600; }
 
   @media (max-width: 380px) {
     body { padding: 16px 12px; }
@@ -234,6 +237,7 @@ const PAGE = `<!doctype html>
     not_configured: "الخدمة غير مكتملة الإعداد",
     bad_passcode: "كلمة المرور غير صحيحة",
     empty_channel: "اكتب رابط القناة",
+    already_added: "القناة مضافة بالفعل",
     busy: "هناك إضافة قيد التنفيذ الآن، جرّب بعد دقيقة",
     daily_limit: "وصلت للحد اليومي، جرّب غدًا"
   };
@@ -337,7 +341,13 @@ const PAGE = `<!doctype html>
       .then(function (data) {
         if (!data || !data.ok) {
           var code = data && data.error;
-          say(ERRORS[code] || MESSAGES.generic, "err");
+          var text = ERRORS[code] || MESSAGES.generic;
+          var kind = "err";
+          if (code === "already_added") {
+            if (data.name) { text = text + ": " + data.name; }
+            kind = "warn";
+          }
+          say(text, kind);
           lock(false);
           return;
         }
@@ -432,6 +442,74 @@ async function listRuns(env) {
   }
 }
 
+// The canonical channel id shape, mirroring _CHANNEL_ID_RE in scripts/add_channel.py.
+const CHANNEL_ID_RE = /^UC[A-Za-z0-9_-]{22}$/;
+
+// The UC id the input names, or "" when the input is a @handle, a /c/ or /user/
+// vanity path, or a bare name. Those forms need a YouTube channels.list call to
+// resolve and this Worker holds no API key, so they skip the pre-check and are
+// left to scripts/add_channel.py exactly as before.
+function channelIdFromInput(raw) {
+  const text = String(raw).trim().replace(/[?#].*$/, "");
+  const segments = text.split("/").filter(function (s) { return s.length > 0; });
+
+  for (let i = 0; i < segments.length; i++) {
+    if (segments[i].toLowerCase() === "channel") {
+      const next = segments[i + 1];
+      return next !== undefined && CHANNEL_ID_RE.test(next) ? next : "";
+    }
+  }
+
+  return segments.length === 1 && CHANNEL_ID_RE.test(segments[0]) ? segments[0] : "";
+}
+
+// { name } when the channel is already in sheikhs.json, false when it is not,
+// and null when the list could not be read. A null makes the caller fall
+// through and dispatch, exactly as it did before this check existed — the
+// pre-check is a convenience, never a gate.
+async function lookupExistingChannel(env, channelId) {
+  const url = GITHUB_API + "/repos/" + env.GITHUB_OWNER + "/" + env.GITHUB_REPO +
+    "/contents/sheikhs.json?ref=" + encodeURIComponent(env.GITHUB_REF);
+
+  const headers = githubHeaders(env);
+  // The raw media type returns the file body itself. The Contents API is read
+  // instead of raw.githubusercontent.com because that host serves a CDN copy
+  // that can lag several minutes — exactly the window a re-submission lands in.
+  headers["Accept"] = "application/vnd.github.raw";
+
+  let response;
+  try {
+    response = await fetch(url, { headers: headers });
+  } catch (error) {
+    return null;
+  }
+
+  if (!response.ok) {
+    console.log("sheikhs.json request failed with status", response.status);
+    return null;
+  }
+
+  let payload;
+  try {
+    payload = await response.json();
+  } catch (error) {
+    return null;
+  }
+
+  const channels = payload && payload.channels;
+  if (!Array.isArray(channels)) {
+    return null;
+  }
+
+  for (const entry of channels) {
+    if (entry && entry.id === channelId) {
+      return { name: typeof entry.name === "string" ? entry.name : "" };
+    }
+  }
+
+  return false;
+}
+
 async function dispatchWorkflow(env, channel, name) {
   const url = GITHUB_API + "/repos/" + env.GITHUB_OWNER + "/" + env.GITHUB_REPO +
     "/actions/workflows/" + env.WORKFLOW_FILE + "/dispatches";
@@ -490,6 +568,18 @@ async function handleAdd(request, env) {
     return failure("empty_channel", 400);
   }
   const name = typeof body.name === "string" ? body.name.trim() : "";
+
+  // Duplicate pre-check, deliberately ahead of the busy and daily-limit guards:
+  // a channel that is already listed gets a clear answer instead of queueing a
+  // run that resolves it, changes nothing, and still reports success. Only the
+  // UC-id and /channel/<id> forms can be checked here — see channelIdFromInput.
+  const channelId = channelIdFromInput(channel);
+  if (channelId !== "") {
+    const existing = await lookupExistingChannel(env, channelId);
+    if (existing !== null && existing !== false) {
+      return jsonResponse({ ok: false, error: "already_added", name: existing.name }, 409);
+    }
+  }
 
   // One listing serves both guards.
   const runs = await listRuns(env);

@@ -32,6 +32,7 @@ jobs:
           python-version: "3.11"
 
       - name: Add channel to sheikhs.json
+        id: add
         env:
           YOUTUBE_API_KEY: ${{ secrets.YOUTUBE_API_KEY }}
           INPUT_CHANNEL: ${{ inputs.channel }}
@@ -39,11 +40,13 @@ jobs:
         run: python scripts/add_channel.py
 
       - name: Refresh prefetched artifacts
+        if: steps.add.outputs.added == 'true'
         env:
           YOUTUBE_API_KEY: ${{ secrets.YOUTUBE_API_KEY }}
         run: python scripts/prefetch.py
 
       - name: Commit and push
+        if: steps.add.outputs.added == 'true'
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"

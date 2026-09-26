@@ -58,6 +58,15 @@ def log(msg):
     print(msg, flush=True)
 
 
+def set_step_output(name, value):
+    """Write a GitHub Actions step output, no-op outside Actions."""
+    path = os.environ.get("GITHUB_OUTPUT")
+    if not path:
+        return
+    with open(path, "a", encoding="utf-8") as handle:
+        handle.write("%s=%s\n" % (name, value))
+
+
 def today_utc():
     return datetime.now(timezone.utc).strftime("%Y-%m-%d")
 
@@ -299,6 +308,7 @@ def main():
         if isinstance(existing, dict) and existing.get("id") == channel_id:
             log("Already in the list: %s (%s)" % (channel_id, as_str(existing.get("name"))))
             log("Quota units consumed: %d" % quota_units)
+            set_step_output("added", "false")
             return 0
 
     youtube_title = as_str((resource.get("snippet") or {}).get("title")).strip()
@@ -324,6 +334,7 @@ def main():
     log("  sheikhs.json : %d bytes" % size)
     git_diff_stat(SHEIKHS_PATH)
     log("Quota units consumed: %d" % quota_units)
+    set_step_output("added", "true")
     return 0
 
 
