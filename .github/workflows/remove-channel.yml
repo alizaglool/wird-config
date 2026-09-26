@@ -1,26 +1,28 @@
-name: Add sheikh channel
+name: Remove sheikh channel
 
 on:
   workflow_dispatch:
     inputs:
       channel:
-        description: "Channel URL, @handle, or UC… id"
+        description: "UC… id of the channel to remove"
         required: true
         type: string
-      name:
-        description: "Display name in the app (blank = use YouTube's title)"
-        required: false
+      confirm:
+        description: "Type REMOVE to confirm — anything else aborts"
+        required: true
         type: string
 
 permissions:
   contents: write
 
+# Shared with add-channel.yml on purpose: both jobs rewrite sheikhs.json, so an add
+# and a remove running at the same time would lose one of the two edits.
 concurrency:
   group: channel-mutation
   cancel-in-progress: false
 
 jobs:
-  add:
+  remove:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
@@ -31,22 +33,15 @@ jobs:
         with:
           python-version: "3.11"
 
-      - name: Add channel to sheikhs.json
-        id: add
+      - name: Remove channel from sheikhs.json
+        id: remove
         env:
-          YOUTUBE_API_KEY: ${{ secrets.YOUTUBE_API_KEY }}
           INPUT_CHANNEL: ${{ inputs.channel }}
-          INPUT_NAME: ${{ inputs.name }}
-        run: python scripts/add_channel.py
-
-      - name: Refresh prefetched artifacts
-        if: steps.add.outputs.added == 'true'
-        env:
-          YOUTUBE_API_KEY: ${{ secrets.YOUTUBE_API_KEY }}
-        run: python scripts/prefetch.py
+          INPUT_CONFIRM: ${{ inputs.confirm }}
+        run: python scripts/remove_channel.py
 
       - name: Commit and push
-        if: steps.add.outputs.added == 'true'
+        if: steps.remove.outputs.removed == 'true'
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
@@ -54,6 +49,6 @@ jobs:
           if git diff --staged --quiet; then
             echo "No changes to commit."
           else
-            git commit -m "chore: add channel via workflow"
+            git commit -m "chore: remove channel via workflow"
             git push
           fi

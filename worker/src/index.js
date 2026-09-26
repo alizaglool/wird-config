@@ -19,7 +19,7 @@ const PAGE = `<!doctype html>
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
-<title>إضافة قناة — ورد</title>
+<title>إدارة القنوات — ورد</title>
 <style>
   :root {
     color-scheme: light;
@@ -33,6 +33,7 @@ const PAGE = `<!doctype html>
     --accent-soft: rgba(15, 122, 90, 0.14);
     --ok: #0f7a5a;
     --err: #b3261e;
+    --err-soft: rgba(179, 38, 30, 0.16);   /* light :root */
     --warn: #8a5300;
     --shadow: 0 1px 2px rgba(20, 23, 26, 0.05), 0 8px 24px rgba(20, 23, 26, 0.06);
   }
@@ -50,6 +51,7 @@ const PAGE = `<!doctype html>
       --accent-soft: rgba(63, 191, 147, 0.18);
       --ok: #3fbf93;
       --err: #ff8a80;
+      --err-soft: rgba(255, 138, 128, 0.20); /* dark :root */
       --warn: #f2b25c;
       --shadow: 0 1px 2px rgba(0, 0, 0, 0.4), 0 8px 24px rgba(0, 0, 0, 0.35);
     }
@@ -176,10 +178,51 @@ const PAGE = `<!doctype html>
   .status.err { color: var(--err); font-weight: 600; }
   .status.warn { color: var(--warn); font-weight: 600; }
 
+  .divider {
+    height: 1px;
+    margin: 32px 0 26px;
+    background: var(--line);
+  }
+
+  h2 {
+    margin: 0;
+    font-size: 19px;
+    font-weight: 700;
+    letter-spacing: -0.01em;
+  }
+
+  .confirm {
+    margin-top: 20px;
+    padding: 14px 16px;
+    border: 1px solid var(--line);
+    border-radius: 12px;
+  }
+
+  .target {
+    margin: 0;
+    font-size: 15px;
+    line-height: 1.6;
+    color: var(--text);
+  }
+
+  .target strong { font-weight: 700; }
+
+  button.danger { background: var(--err); }
+
+  button.danger:focus-visible { box-shadow: 0 0 0 3px var(--err-soft); }
+
+  button.ghost {
+    margin-top: 10px;
+    color: var(--muted);
+    background: transparent;
+    font-weight: 500;
+  }
+
   @media (max-width: 380px) {
     body { padding: 16px 12px; }
     .card { padding: 24px 20px; border-radius: 16px; }
     h1 { font-size: 21px; }
+    h2 { font-size: 17px; }
   }
 
   @media (prefers-reduced-motion: reduce) {
@@ -190,8 +233,8 @@ const PAGE = `<!doctype html>
 </head>
 <body>
   <main class="card">
-    <h1>إضافة قناة</h1>
-    <p class="sub">أضف قناة يوتيوب إلى تطبيق ورد</p>
+    <h1>إدارة القنوات</h1>
+    <p class="sub">أضف قناة يوتيوب إلى تطبيق ورد أو احذف قناة منه</p>
 
     <form id="form" novalidate>
       <div class="field">
@@ -213,6 +256,33 @@ const PAGE = `<!doctype html>
     </form>
 
     <p class="status" id="status" role="status" aria-live="polite"></p>
+
+    <div class="divider"></div>
+
+    <h2>حذف قناة</h2>
+    <p class="sub">اكتب رابط القناة أو معرّفها أو اسمها كما يظهر في التطبيق</p>
+
+    <form id="rform" novalidate>
+      <div class="field">
+        <label for="rchannel">القناة</label>
+        <input id="rchannel" type="text" placeholder="https://youtube.com/@handle" autocomplete="off" autocapitalize="off" autocorrect="off" spellcheck="false" dir="auto">
+      </div>
+
+      <div class="field">
+        <label for="rpasscode">كلمة المرور</label>
+        <input id="rpasscode" type="password" autocomplete="current-password">
+      </div>
+
+      <button id="rsubmit" type="submit">بحث</button>
+    </form>
+
+    <div class="confirm" id="confirm" hidden>
+      <p class="target">سيتم حذف: <strong id="target"></strong></p>
+      <button id="rconfirm" type="button" class="danger">تأكيد الحذف</button>
+      <button id="rcancel" type="button" class="ghost">تراجع</button>
+    </div>
+
+    <p class="status" id="rstatus" role="status" aria-live="polite"></p>
   </main>
 
 <script>
@@ -242,6 +312,26 @@ const PAGE = `<!doctype html>
     daily_limit: "وصلت للحد اليومي، جرّب غدًا"
   };
 
+  var REMOVE_MESSAGES = {
+    waiting: MESSAGES.waiting,
+    running: MESSAGES.running,
+    sending: MESSAGES.sending,
+    success: "✅ تم الحذف. سيختفي من التطبيق بعد التحديث",
+    failure: "❌ فشل الحذف — راجع السجل",
+    timeout: MESSAGES.timeout,
+    generic: MESSAGES.generic
+  };
+
+  var REMOVE_ERRORS = {
+    not_configured: ERRORS.not_configured,
+    bad_passcode: ERRORS.bad_passcode,
+    empty_channel: "اكتب رابط القناة أو معرّفها أو اسمها",
+    not_found: "لا توجد قناة بهذا الرابط أو الاسم في القائمة",
+    ambiguous: "أكثر من قناة بهذا الاسم — استخدم الرابط أو المعرّف",
+    busy: "هناك عملية قيد التنفيذ الآن، جرّب بعد دقيقة",
+    daily_limit: ERRORS.daily_limit
+  };
+
   var form = document.getElementById("form");
   var statusEl = document.getElementById("status");
   var channelEl = document.getElementById("channel");
@@ -250,120 +340,243 @@ const PAGE = `<!doctype html>
   var submitEl = document.getElementById("submit");
   var controls = [channelEl, nameEl, passcodeEl, submitEl];
 
-  var timer = null;
-  var submittedAt = 0;
-  var deadline = 0;
+  // One flow per form. Each call closes over its own timer, submittedAt and deadline
+  // so the two forms can never clear or overwrite each other's polling state.
+  function makeFlow(config) {
+    var timer = null;
+    var submittedAt = 0;
+    var deadline = 0;
 
-  function lock(locked) {
-    for (var i = 0; i < controls.length; i++) {
-      controls[i].disabled = locked;
-    }
-  }
-
-  function say(text, kind) {
-    statusEl.textContent = text;
-    statusEl.className = kind ? "status " + kind : "status";
-  }
-
-  function finish(text, kind) {
-    if (timer !== null) {
-      clearInterval(timer);
-      timer = null;
-    }
-    say(text, kind);
-    lock(false);
-    channelEl.value = "";
-    channelEl.focus();
-  }
-
-  function readStatus() {
-    if (Date.now() > deadline) {
-      finish(MESSAGES.timeout, "err");
-      return;
+    function lock(locked) {
+      for (var i = 0; i < config.controls.length; i++) {
+        config.controls[i].disabled = locked;
+      }
     }
 
-    fetch("/status", { cache: "no-store" })
-      .then(function (response) { return response.json(); })
-      .then(function (data) {
-        if (!data || !data.ok) { return; }
+    function say(text, kind) {
+      config.statusEl.textContent = text;
+      config.statusEl.className = kind ? "status " + kind : "status";
+    }
 
-        var run = data.run;
-        if (!run || !run.createdAt) {
-          say(MESSAGES.waiting);
-          return;
-        }
+    function finish(text, kind) {
+      if (timer !== null) {
+        clearInterval(timer);
+        timer = null;
+      }
+      say(text, kind);
+      lock(false);
+      config.reset();
+    }
 
-        var createdAt = Date.parse(run.createdAt);
-        if (isNaN(createdAt) || createdAt < submittedAt - GRACE_MS) {
-          say(MESSAGES.waiting);
-          return;
-        }
+    function readStatus() {
+      if (Date.now() > deadline) {
+        finish(config.messages.timeout, "err");
+        return;
+      }
 
-        if (run.status === "completed") {
-          if (run.conclusion === "success") {
-            finish(MESSAGES.success, "ok");
-          } else {
-            finish(MESSAGES.failure, "err");
+      fetch(config.statusUrl, { cache: "no-store" })
+        .then(function (response) { return response.json(); })
+        .then(function (data) {
+          if (!data || !data.ok) { return; }
+
+          var run = data.run;
+          if (!run || !run.createdAt) {
+            say(config.messages.waiting);
+            return;
           }
-          return;
-        }
 
-        if (run.status === "in_progress") {
-          say(MESSAGES.running);
-          return;
-        }
+          var createdAt = Date.parse(run.createdAt);
+          if (isNaN(createdAt) || createdAt < submittedAt - GRACE_MS) {
+            say(config.messages.waiting);
+            return;
+          }
 
-        say(MESSAGES.waiting);
+          if (run.status === "completed") {
+            if (run.conclusion === "success") {
+              finish(config.messages.success, "ok");
+            } else {
+              finish(config.messages.failure, "err");
+            }
+            return;
+          }
+
+          if (run.status === "in_progress") {
+            say(config.messages.running);
+            return;
+          }
+
+          say(config.messages.waiting);
+        })
+        .catch(function () { /* transient network blip: keep polling */ });
+    }
+
+    // options.poll is false for a request that resolves something without starting a
+    // run; such a request must never begin polling /status.
+    function post(url, payload, options) {
+      if (timer !== null) { return; }
+
+      lock(true);
+      say(config.messages.sending);
+
+      fetch(url, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        cache: "no-store",
+        body: JSON.stringify(payload)
       })
-      .catch(function () { /* transient network blip: keep polling */ });
+        .then(function (response) {
+          return response.json().catch(function () { return null; });
+        })
+        .then(function (data) {
+          if (!data || !data.ok) {
+            options.rejected(data);
+            lock(false);
+            return;
+          }
+
+          if (options.accepted) { options.accepted(data); }
+
+          if (!options.poll) {
+            lock(false);
+            return;
+          }
+
+          submittedAt = Date.parse(data.submittedAt);
+          if (isNaN(submittedAt)) { submittedAt = Date.now(); }
+          deadline = Date.now() + TIMEOUT_MS;
+
+          say(config.messages.waiting);
+          timer = setInterval(readStatus, POLL_MS);
+          readStatus();
+        })
+        .catch(function () {
+          say(config.messages.generic, "err");
+          lock(false);
+        });
+    }
+
+    return {
+      post: post,
+      say: say,
+      isBusy: function () { return timer !== null; }
+    };
   }
+
+  var addFlow = makeFlow({
+    statusEl: statusEl,
+    controls: controls,
+    statusUrl: "/status",
+    messages: MESSAGES,
+    reset: function () {
+      channelEl.value = "";
+      channelEl.focus();
+    }
+  });
 
   form.addEventListener("submit", function (event) {
     event.preventDefault();
-    if (timer !== null || submitEl.disabled) { return; }
+    if (addFlow.isBusy() || submitEl.disabled) { return; }
 
-    lock(true);
-    say(MESSAGES.sending);
+    addFlow.post("/add", {
+      channel: channelEl.value,
+      name: nameEl.value,
+      passcode: passcodeEl.value
+    }, {
+      poll: true,
+      rejected: function (data) {
+        var code = data && data.error;
+        var text = ERRORS[code] || MESSAGES.generic;
+        var kind = "err";
+        if (code === "already_added") {
+          if (data.name) { text = text + ": " + data.name; }
+          kind = "warn";
+        }
+        addFlow.say(text, kind);
+      }
+    });
+  });
 
-    fetch("/add", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      cache: "no-store",
-      body: JSON.stringify({
-        channel: channelEl.value,
-        name: nameEl.value,
-        passcode: passcodeEl.value
-      })
-    })
-      .then(function (response) {
-        return response.json().catch(function () { return null; });
-      })
-      .then(function (data) {
-        if (!data || !data.ok) {
-          var code = data && data.error;
-          var text = ERRORS[code] || MESSAGES.generic;
-          var kind = "err";
-          if (code === "already_added") {
-            if (data.name) { text = text + ": " + data.name; }
-            kind = "warn";
-          }
-          say(text, kind);
-          lock(false);
+  var rform = document.getElementById("rform");
+  var rstatusEl = document.getElementById("rstatus");
+  var rchannelEl = document.getElementById("rchannel");
+  var rpasscodeEl = document.getElementById("rpasscode");
+  var rsubmitEl = document.getElementById("rsubmit");
+  var confirmEl = document.getElementById("confirm");
+  var targetEl = document.getElementById("target");
+  var rconfirmEl = document.getElementById("rconfirm");
+  var rcancelEl = document.getElementById("rcancel");
+
+  // The id step 1 resolved. Step 2 sends this, never the text in the field, so the
+  // confirmation can never apply to a different channel than the one just named.
+  var resolvedId = "";
+
+  function hideConfirm() {
+    confirmEl.hidden = true;
+    targetEl.textContent = "";
+    resolvedId = "";
+  }
+
+  var removeFlow = makeFlow({
+    statusEl: rstatusEl,
+    controls: [rchannelEl, rpasscodeEl, rsubmitEl, rconfirmEl, rcancelEl],
+    statusUrl: "/status?workflow=remove",
+    messages: REMOVE_MESSAGES,
+    reset: function () {
+      hideConfirm();
+      rchannelEl.value = "";
+    }
+  });
+
+  function rejectRemove(data) {
+    var code = data && data.error;
+    removeFlow.say(REMOVE_ERRORS[code] || REMOVE_MESSAGES.generic, "err");
+  }
+
+  rform.addEventListener("submit", function (event) {
+    event.preventDefault();
+    if (removeFlow.isBusy() || rsubmitEl.disabled) { return; }
+
+    // A stale confirmation must never survive a new search.
+    hideConfirm();
+
+    removeFlow.post("/remove/lookup", {
+      channel: rchannelEl.value,
+      passcode: rpasscodeEl.value
+    }, {
+      poll: false,
+      rejected: rejectRemove,
+      accepted: function (data) {
+        resolvedId = typeof data.id === "string" ? data.id : "";
+        if (resolvedId === "") {
+          removeFlow.say(REMOVE_MESSAGES.generic, "err");
           return;
         }
+        targetEl.textContent = typeof data.name === "string" && data.name !== ""
+          ? data.name
+          : resolvedId;
+        confirmEl.hidden = false;
+        removeFlow.say("");
+        rconfirmEl.focus();
+      }
+    });
+  });
 
-        submittedAt = Date.parse(data.submittedAt);
-        if (isNaN(submittedAt)) { submittedAt = Date.now(); }
-        deadline = Date.now() + TIMEOUT_MS;
+  rconfirmEl.addEventListener("click", function () {
+    if (removeFlow.isBusy() || resolvedId === "") { return; }
 
-        say(MESSAGES.waiting);
-        timer = setInterval(readStatus, POLL_MS);
-        readStatus();
-      })
-      .catch(function () {
-        say(MESSAGES.generic, "err");
-        lock(false);
-      });
+    removeFlow.post("/remove", {
+      id: resolvedId,
+      passcode: rpasscodeEl.value
+    }, {
+      poll: true,
+      rejected: rejectRemove
+    });
+  });
+
+  rcancelEl.addEventListener("click", function () {
+    if (removeFlow.isBusy()) { return; }
+    hideConfirm();
+    removeFlow.say("");
   });
 })();
 </script>
@@ -407,6 +620,11 @@ function hasSecret(value) {
   return typeof value === "string" && value.length > 0;
 }
 
+// A JSON null or a missing field must never be treated as a usable string.
+function asText(value) {
+  return typeof value === "string" ? value : "";
+}
+
 // All four headers are required; GitHub hard-403s a request without User-Agent.
 function githubHeaders(env) {
   return {
@@ -418,9 +636,9 @@ function githubHeaders(env) {
 }
 
 // Returns the run list (newest first) or null on any upstream failure.
-async function listRuns(env) {
+async function listRuns(env, workflowFile) {
   const url = GITHUB_API + "/repos/" + env.GITHUB_OWNER + "/" + env.GITHUB_REPO +
-    "/actions/workflows/" + env.WORKFLOW_FILE + "/runs?per_page=100";
+    "/actions/workflows/" + workflowFile + "/runs?per_page=100";
 
   let response;
   try {
@@ -586,9 +804,87 @@ async function lookupExistingByHandle(env, handle) {
   return false;
 }
 
-async function dispatchWorkflow(env, channel, name) {
+// The single channel the input names, resolved entirely from files already in the
+// repo — no YouTube key, no quota. Returns one of:
+//   { status: "ok", id, name }   exactly one match
+//   { status: "not_found" }      nothing matched
+//   { status: "ambiguous" }      a display name shared by more than one entry
+//   { status: "error" }          a repo file could not be read
+async function resolveForRemoval(env, raw) {
+  const payload = await fetchRepoJson(env, "sheikhs.json");
+  const entries = payload && payload.channels;
+  if (!Array.isArray(entries)) {
+    return { status: "error" };
+  }
+
+  // 1. A UC id the input names outright. sheikhs.json is the file the run edits, so
+  //    it is the authority. An explicit id that is not listed can only be not_found:
+  //    it must never fall through to the name match below, or a mistyped id would
+  //    resolve to some other channel.
+  const id = channelIdFromInput(raw);
+  if (id !== "") {
+    for (const entry of entries) {
+      if (entry && entry.id === id) {
+        return { status: "ok", id: id, name: asText(entry.name) };
+      }
+    }
+    return { status: "not_found" };
+  }
+
+  // 2. An @handle. channels/index.json is the only file that stores handles; it is
+  //    generated from sheikhs.json, so the id it yields is re-checked against
+  //    sheikhs.json before it is accepted.
+  const handle = handleFromInput(raw);
+  if (handle !== "") {
+    const index = await fetchRepoJson(env, "channels/index.json");
+    const indexed = index && index.channels;
+    if (!Array.isArray(indexed)) {
+      return { status: "error" };
+    }
+    for (const entry of indexed) {
+      const stored = entry && typeof entry.channelHandle === "string" ? entry.channelHandle : "";
+      // Normalize before the emptiness check: a stored "@" strips to "" and would
+      // otherwise match an empty query.
+      const normalized = (stored.charAt(0) === "@" ? stored.slice(1) : stored).toLowerCase();
+      if (normalized === "" || normalized !== handle) {
+        continue;
+      }
+      const matchedId = asText(entry.id);
+      for (const row of entries) {
+        if (row && row.id === matchedId) {
+          return { status: "ok", id: matchedId, name: asText(row.name) };
+        }
+      }
+    }
+    return { status: "not_found" };
+  }
+
+  // 3. The display name, matched exactly after trimming. Last on purpose: a name is
+  //    the only form that two different channels can share.
+  const wanted = String(raw).trim();
+  if (wanted === "") {
+    return { status: "not_found" };
+  }
+  let hit = null;
+  let hits = 0;
+  for (const entry of entries) {
+    if (entry && typeof entry.name === "string" && entry.name.trim() === wanted) {
+      hit = entry;
+      hits += 1;
+    }
+  }
+  if (hits > 1) {
+    return { status: "ambiguous" };
+  }
+  if (hits === 1) {
+    return { status: "ok", id: asText(hit.id), name: asText(hit.name) };
+  }
+  return { status: "not_found" };
+}
+
+async function dispatchWorkflow(env, workflowFile, inputs) {
   const url = GITHUB_API + "/repos/" + env.GITHUB_OWNER + "/" + env.GITHUB_REPO +
-    "/actions/workflows/" + env.WORKFLOW_FILE + "/dispatches";
+    "/actions/workflows/" + workflowFile + "/dispatches";
 
   const headers = githubHeaders(env);
   headers["Content-Type"] = "application/json";
@@ -600,7 +896,7 @@ async function dispatchWorkflow(env, channel, name) {
       headers: headers,
       body: JSON.stringify({
         ref: env.GITHUB_REF,
-        inputs: { channel: channel, name: name }
+        inputs: inputs
       })
     });
   } catch (error) {
@@ -674,7 +970,7 @@ async function handleAdd(request, env) {
   }
 
   // One listing serves both guards.
-  const runs = await listRuns(env);
+  const runs = await listRuns(env, env.WORKFLOW_FILE);
   if (runs === null) {
     return failure("github_error", 502);
   }
@@ -703,7 +999,8 @@ async function handleAdd(request, env) {
   }
 
   const submittedAt = new Date().toISOString();
-  const dispatched = await dispatchWorkflow(env, channel, name);
+  const dispatched = await dispatchWorkflow(env, env.WORKFLOW_FILE,
+    { channel: channel, name: name });
   if (!dispatched) {
     return failure("github_error", 502);
   }
@@ -711,12 +1008,138 @@ async function handleAdd(request, env) {
   return jsonResponse({ ok: true, submittedAt: submittedAt }, 200);
 }
 
-async function handleStatus(env) {
+// Step 1 of the two-step remove: resolve the submitted text to exactly one channel
+// and echo its name back. Mutates nothing and dispatches nothing, so the busy and
+// daily-limit guards deliberately do NOT apply here — they belong on the step that
+// starts a run.
+async function handleRemoveLookup(request, env) {
+  if (!hasSecret(env.REMOVE_PASSCODE) || !hasSecret(env.GITHUB_TOKEN)) {
+    return failure("not_configured", 503);
+  }
+
+  let body;
+  try {
+    body = await request.json();
+  } catch (error) {
+    return failure("bad_request", 400);
+  }
+
+  if (body === null || typeof body !== "object") {
+    return failure("bad_request", 400);
+  }
+
+  if (!constantTimeEquals(body.passcode, env.REMOVE_PASSCODE)) {
+    return failure("bad_passcode", 401);
+  }
+
+  // Cleaned exactly once, before the emptiness check, for the same reason handleAdd
+  // does it: an input that is nothing but pasted punctuation answers empty_channel
+  // instead of resolving to nothing.
+  const channel = stripTrailingJunk(
+    typeof body.channel === "string" ? body.channel.trim() : "");
+  if (channel.length === 0) {
+    return failure("empty_channel", 400);
+  }
+
+  const match = await resolveForRemoval(env, channel);
+  if (match.status === "error") {
+    return failure("github_error", 502);
+  }
+  if (match.status === "ambiguous") {
+    return failure("ambiguous", 409);
+  }
+  if (match.status !== "ok") {
+    return failure("not_found", 404);
+  }
+
+  return jsonResponse({ ok: true, id: match.id, name: match.name }, 200);
+}
+
+async function handleRemove(request, env) {
+  if (!hasSecret(env.REMOVE_PASSCODE) || !hasSecret(env.GITHUB_TOKEN)) {
+    return failure("not_configured", 503);
+  }
+
+  let body;
+  try {
+    body = await request.json();
+  } catch (error) {
+    return failure("bad_request", 400);
+  }
+
+  if (body === null || typeof body !== "object") {
+    return failure("bad_request", 400);
+  }
+
+  if (!constantTimeEquals(body.passcode, env.REMOVE_PASSCODE)) {
+    return failure("bad_passcode", 401);
+  }
+
+  // This step takes the id step 1 resolved, never free text: the channel the page
+  // named and the channel the run deletes are then the same value by construction.
+  const id = typeof body.id === "string" ? body.id.trim() : "";
+  if (id.length === 0) {
+    return failure("empty_channel", 400);
+  }
+  // A value that is not a channel id names no channel.
+  if (!CHANNEL_ID_RE.test(id)) {
+    return failure("not_found", 404);
+  }
+
+  // Re-resolved server-side rather than trusted: the list can change between the two
+  // steps. A bare UC id always takes the id branch, so this can only answer ok,
+  // not_found or error — never ambiguous.
+  const match = await resolveForRemoval(env, id);
+  if (match.status === "error") {
+    return failure("github_error", 502);
+  }
+  if (match.status !== "ok") {
+    return failure("not_found", 404);
+  }
+
+  // One listing serves both guards.
+  const runs = await listRuns(env, env.REMOVE_WORKFLOW_FILE);
+  if (runs === null) {
+    return failure("github_error", 502);
+  }
+
+  for (const run of runs) {
+    if (ACTIVE_STATUSES.indexOf(run.status) !== -1) {
+      return failure("busy", 429);
+    }
+  }
+
+  const today = new Date().toISOString().slice(0, 10);
+  let todayCount = 0;
+  for (const run of runs) {
+    if (typeof run.created_at === "string" && run.created_at.slice(0, 10) === today) {
+      todayCount += 1;
+    }
+  }
+  const configuredLimit = Number(env.DAILY_RUN_LIMIT);
+  const dailyLimit = Number.isFinite(configuredLimit) && configuredLimit > 0
+    ? Math.floor(configuredLimit)
+    : DEFAULT_DAILY_RUN_LIMIT;
+  if (todayCount >= dailyLimit) {
+    return failure("daily_limit", 429);
+  }
+
+  const submittedAt = new Date().toISOString();
+  const dispatched = await dispatchWorkflow(env, env.REMOVE_WORKFLOW_FILE,
+    { channel: match.id, confirm: "REMOVE" });
+  if (!dispatched) {
+    return failure("github_error", 502);
+  }
+
+  return jsonResponse({ ok: true, submittedAt: submittedAt, name: match.name }, 200);
+}
+
+async function handleStatus(env, workflowFile) {
   if (!hasSecret(env.GITHUB_TOKEN)) {
     return failure("not_configured", 503);
   }
 
-  const runs = await listRuns(env);
+  const runs = await listRuns(env, workflowFile);
   if (runs === null) {
     return failure("github_error", 502);
   }
@@ -750,7 +1173,8 @@ async function handleStatus(env) {
 
 export default {
   async fetch(request, env, ctx) {
-    const path = new URL(request.url).pathname;
+    const url = new URL(request.url);
+    const path = url.pathname;
 
     if (request.method === "GET" && path === "/") {
       return new Response(PAGE, {
@@ -769,9 +1193,30 @@ export default {
       }
     }
 
-    if (request.method === "GET" && path === "/status") {
+    if (request.method === "POST" && path === "/remove/lookup") {
       try {
-        return await handleStatus(env);
+        return await handleRemoveLookup(request, env);
+      } catch (error) {
+        return failure("github_error", 502);
+      }
+    }
+
+    if (request.method === "POST" && path === "/remove") {
+      try {
+        return await handleRemove(request, env);
+      } catch (error) {
+        return failure("github_error", 502);
+      }
+    }
+
+    if (request.method === "GET" && path === "/status") {
+      // An absent or unrecognised value resolves to the add workflow — which is
+      // exactly what every client that existed before the remove flow asked for.
+      const workflowFile = url.searchParams.get("workflow") === "remove"
+        ? env.REMOVE_WORKFLOW_FILE
+        : env.WORKFLOW_FILE;
+      try {
+        return await handleStatus(env, workflowFile);
       } catch (error) {
         return failure("github_error", 502);
       }

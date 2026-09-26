@@ -2,12 +2,13 @@ name = "wird-add-channel"
 main = "src/index.js"
 compatibility_date = "2026-09-25"
 
-# GITHUB_TOKEN and ADD_PASSCODE are secrets, set with `wrangler secret put`.
-# They must never be added to this file.
+# GITHUB_TOKEN, ADD_PASSCODE and REMOVE_PASSCODE are secrets, set with
+# `wrangler secret put`. They must never be added to this file.
 
 [vars]
 GITHUB_OWNER = "alizaglool"
 GITHUB_REPO = "wird-config"
 WORKFLOW_FILE = "add-channel.yml"
+REMOVE_WORKFLOW_FILE = "remove-channel.yml"
 GITHUB_REF = "main"
 DAILY_RUN_LIMIT = "15"
