@@ -47,6 +47,12 @@ _HANDLE_RE = re.compile(r"^[\w.\-]+$")
 # than /@handle does, so they get a warning rather than a silent accept.
 _LEGACY_PREFIXES = frozenset(("c", "user"))
 
+# Trailing characters a paste can carry in that are never part of a channel
+# identifier. Kept character-for-character identical to TRAILING_JUNK in
+# worker/src/index.js. "-", "_", "@" and "/" are deliberately absent: each is
+# legal inside a handle or a UC id.
+_TRAILING_JUNK = ".,;:!?)]}>([{<\"'`\u2019\u2018\u201D\u201C\u00AB\u00BB\u060C\u061B\u061F\u06D4\u2026 \t\r\n"
+
 quota_units = 0
 
 
@@ -88,6 +94,10 @@ def parse_channel_input(value):
 
     # A #fragment or a ?si=... share suffix is never part of the identifier.
     text = text.split("#", 1)[0].split("?", 1)[0].strip()
+    # Trailing sentence punctuation is a paste artifact. Left in place it passes
+    # _HANDLE_RE, which permits a dot anywhere, and reaches forHandle verbatim:
+    # run 36237559826 failed exactly that way on a single trailing period.
+    text = text.rstrip(_TRAILING_JUNK)
     if not text:
         return None
 

@@ -442,6 +442,25 @@ async function listRuns(env) {
   }
 }
 
+// Trailing characters that a paste can carry in but that are never part of a
+// channel identifier: sentence punctuation, quotes, brackets, Arabic stops, and
+// whitespace. A single trailing "." cost a failed run on 26/09/2026 — it reached
+// forHandle verbatim and YouTube answered not-found. "-", "_", "@" and "/" are
+// deliberately absent: each is legal inside a handle or a UC id. This set is
+// duplicated in scripts/add_channel.py and the two must stay identical.
+const TRAILING_JUNK = ".,;:!?)]}>([{<\"'`\u2019\u2018\u201D\u201C\u00AB\u00BB\u060C\u061B\u061F\u06D4\u2026 \t\r\n";
+
+// The input with every trailing junk character removed. Only the tail is
+// touched, so an internal period in a handle such as "dr.mahmoud_shaban"
+// survives untouched.
+function stripTrailingJunk(text) {
+  let end = text.length;
+  while (end > 0 && TRAILING_JUNK.indexOf(text.charAt(end - 1)) !== -1) {
+    end -= 1;
+  }
+  return text.slice(0, end);
+}
+
 // The canonical channel id shape, mirroring _CHANNEL_ID_RE in scripts/add_channel.py.
 const CHANNEL_ID_RE = /^UC[A-Za-z0-9_-]{22}$/;
 
@@ -620,7 +639,12 @@ async function handleAdd(request, env) {
   }
 
   // scripts/add_channel.py owns channel parsing; only emptiness is checked here.
-  const channel = typeof body.channel === "string" ? body.channel.trim() : "";
+  // The clean runs BEFORE the emptiness check on purpose: an input that is
+  // nothing but punctuation then answers empty_channel instead of dispatching a
+  // run that cannot resolve anything. One value serves the pre-check below and
+  // the dispatch further down, so the two can never disagree.
+  const channel = stripTrailingJunk(
+    typeof body.channel === "string" ? body.channel.trim() : "");
   if (channel.length === 0) {
     return failure("empty_channel", 400);
   }
