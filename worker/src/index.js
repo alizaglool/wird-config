@@ -463,13 +463,37 @@ function channelIdFromInput(raw) {
   return segments.length === 1 && CHANNEL_ID_RE.test(segments[0]) ? segments[0] : "";
 }
 
-// { name } when the channel is already in sheikhs.json, false when it is not,
-// and null when the list could not be read. A null makes the caller fall
-// through and dispatch, exactly as it did before this check existed — the
-// pre-check is a convenience, never a gate.
-async function lookupExistingChannel(env, channelId) {
+// The @handle the input names, lowercased and WITHOUT the leading "@", or "" when
+// the input names no handle. Covers "@name", "youtube.com/@name", any host, and a
+// trailing path such as "/videos". A /c/ or /user/ vanity path is NOT a handle and
+// still needs a YouTube channels.list call this Worker cannot make, so it returns ""
+// and falls through to scripts/add_channel.py exactly as before.
+function handleFromInput(raw) {
+  let text = String(raw).trim().replace(/[?#].*$/, "");
+  try {
+    text = decodeURIComponent(text);
+  } catch (error) {
+    // A malformed percent-escape is not a reason to reject the input; the
+    // undecoded text simply will not match a stored handle.
+  }
+
+  const segments = text.split("/").filter(function (s) { return s.length > 0; });
+  for (const segment of segments) {
+    if (segment.charAt(0) === "@" && segment.length >= 2) {
+      return segment.slice(1).toLowerCase();
+    }
+  }
+
+  return "";
+}
+
+// The parsed body of a repo file, or null when it could not be read. Every failure
+// mode — network throw, non-2xx, unparseable body — collapses to null so that every
+// caller falls through and dispatches, exactly as it did before these checks
+// existed. The pre-checks are a convenience, never a gate.
+async function fetchRepoJson(env, path) {
   const url = GITHUB_API + "/repos/" + env.GITHUB_OWNER + "/" + env.GITHUB_REPO +
-    "/contents/sheikhs.json?ref=" + encodeURIComponent(env.GITHUB_REF);
+    "/contents/" + path + "?ref=" + encodeURIComponent(env.GITHUB_REF);
 
   const headers = githubHeaders(env);
   // The raw media type returns the file body itself. The Contents API is read
@@ -485,17 +509,21 @@ async function lookupExistingChannel(env, channelId) {
   }
 
   if (!response.ok) {
-    console.log("sheikhs.json request failed with status", response.status);
+    console.log(path + " request failed with status", response.status);
     return null;
   }
 
-  let payload;
   try {
-    payload = await response.json();
+    return await response.json();
   } catch (error) {
     return null;
   }
+}
 
+// { name } when the channel is already in sheikhs.json, false when it is not,
+// and null when the list could not be read.
+async function lookupExistingChannel(env, channelId) {
+  const payload = await fetchRepoJson(env, "sheikhs.json");
   const channels = payload && payload.channels;
   if (!Array.isArray(channels)) {
     return null;
@@ -503,6 +531,35 @@ async function lookupExistingChannel(env, channelId) {
 
   for (const entry of channels) {
     if (entry && entry.id === channelId) {
+      return { name: typeof entry.name === "string" ? entry.name : "" };
+    }
+  }
+
+  return false;
+}
+
+// { name } when some listed channel carries this handle, false when none does, and
+// null when the index could not be read. channels/index.json is generated from
+// sheikhs.json by scripts/prefetch.py, so a match here is always a real duplicate.
+// The stored handle is compared with its leading "@" stripped, so an entry written
+// without one still matches.
+async function lookupExistingByHandle(env, handle) {
+  const payload = await fetchRepoJson(env, "channels/index.json");
+  const channels = payload && payload.channels;
+  if (!Array.isArray(channels)) {
+    return null;
+  }
+
+  for (const entry of channels) {
+    const stored = entry && typeof entry.channelHandle === "string" ? entry.channelHandle : "";
+    // Normalize before the emptiness check: a stored "@" strips to "" and would
+    // otherwise match an empty query, the one false positive this check must never
+    // produce.
+    const normalized = (stored.charAt(0) === "@" ? stored.slice(1) : stored).toLowerCase();
+    if (normalized === "") {
+      continue;
+    }
+    if (normalized === handle) {
       return { name: typeof entry.name === "string" ? entry.name : "" };
     }
   }
@@ -571,13 +628,24 @@ async function handleAdd(request, env) {
 
   // Duplicate pre-check, deliberately ahead of the busy and daily-limit guards:
   // a channel that is already listed gets a clear answer instead of queueing a
-  // run that resolves it, changes nothing, and still reports success. Only the
-  // UC-id and /channel/<id> forms can be checked here — see channelIdFromInput.
+  // run that resolves it, changes nothing, and still reports success.
   const channelId = channelIdFromInput(channel);
   if (channelId !== "") {
     const existing = await lookupExistingChannel(env, channelId);
     if (existing !== null && existing !== false) {
       return jsonResponse({ ok: false, error: "already_added", name: existing.name }, 409);
+    }
+  } else {
+    // A @handle cannot be resolved to a UC id without a YouTube API key, but
+    // channels/index.json records every listed channel's handle, so the handle is
+    // itself a key. /c/ and /user/ vanity paths remain uncheckable here.
+    const handle = handleFromInput(channel);
+    if (handle !== "") {
+      const existingByHandle = await lookupExistingByHandle(env, handle);
+      if (existingByHandle !== null && existingByHandle !== false) {
+        return jsonResponse(
+          { ok: false, error: "already_added", name: existingByHandle.name }, 409);
+      }
     }
   }
 
